@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/99designs/aws-ecr-gc/gc"
-	"github.com/99designs/aws-ecr-gc/model"
+	"github.com/alexebird/aws-ecr-gc/gc"
+	"github.com/alexebird/aws-ecr-gc/model"
 )
 
 func TestNoDeletions(t *testing.T) {

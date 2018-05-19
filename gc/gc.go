@@ -5,7 +5,7 @@ package gc
 import (
 	"strings"
 
-	"github.com/99designs/aws-ecr-gc/model"
+	"github.com/alexebird/aws-ecr-gc/model"
 )
 
 // type Params provides configuration to ImagesToDelete()

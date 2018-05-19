@@ -3,7 +3,9 @@
 package registry
 
 import (
-	"github.com/99designs/aws-ecr-gc/model"
+	"os"
+
+	"github.com/alexebird/aws-ecr-gc/model"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ecr"
@@ -15,49 +17,99 @@ type Session struct {
 }
 
 // func NewSession creates a Session for the given AWS region e.g. "us-east-1".
-func NewSession(region string) *Session {
+func NewSession(conf aws.Config) *Session {
 	sess := session.Must(session.NewSession())
-	conf := aws.Config{Region: &region}
 	return &Session{ecr: ecr.New(sess, &conf)}
+}
+
+func (s *Session) Repositories() ([]*ecr.Repository, error) {
+	params := &ecr.DescribeRepositoriesInput{}
+	repos := make([]*ecr.Repository, 0)
+
+	err := s.ecr.DescribeRepositoriesPages(params,
+		func(page *ecr.DescribeRepositoriesOutput, lastPage bool) bool {
+			repos = append(repos, page.Repositories...)
+			return true
+		})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return repos, nil
+}
+
+func (s *Session) Images(repo *string) []*ecr.ImageDetail {
+	var filter *ecr.DescribeImagesFilter
+
+	//if all {
+	filter = nil
+	//} else {
+	//filter = &ecr.DescribeImagesFilter{
+	//TagStatus: aws.String("TAGGED"),
+	//}
+	//}
+
+	regId := os.Getenv("ECR_REGISTRY_ID")
+
+	params := &ecr.DescribeImagesInput{
+		RegistryId:     &regId,
+		RepositoryName: repo,
+		Filter:         filter,
+	}
+
+	images := make([]*ecr.ImageDetail, 0)
+
+	err := s.ecr.DescribeImagesPages(params,
+		func(page *ecr.DescribeImagesOutput, lastPage bool) bool {
+			images = append(images, page.ImageDetails...)
+			return true
+		})
+
+	if err != nil {
+		panic(err)
+	}
+
+	return images
 }
 
 // func Images returns a detailed list of all images in the specified
 // repository.
-func (s *Session) Images(repo string) (model.Images, error) {
-	var handlerErr error
-	var images model.Images
-	var describeImagesPageNum, listImagesPageNum uint
+//func (s *Session) Images(repo string) (model.Images, error) {
+//var handlerErr error
+//var images model.Images
+//var describeImagesPageNum, listImagesPageNum uint
 
-	describeImagesPageHandler := func(page *ecr.DescribeImagesOutput, lastPage bool) bool {
-		describeImagesPageNum++
-		for _, img := range page.ImageDetails {
-			images = append(images, imageFromAws(img))
-		}
-		return describeImagesPageNum <= 100 // arbitrary terminator
-	}
+//describeImagesPageHandler := func(page *ecr.DescribeImagesOutput, lastPage bool) bool {
+//describeImagesPageNum++
+//for _, img := range page.ImageDetails {
+//images = append(images, imageFromAws(img))
+//}
+//return describeImagesPageNum <= 100 // arbitrary terminator
+//}
 
-	listImagesPageHandler := func(page *ecr.ListImagesOutput, lastPage bool) bool {
-		listImagesPageNum++
-		handlerErr = s.ecr.DescribeImagesPages(
-			&ecr.DescribeImagesInput{RepositoryName: &repo, ImageIds: page.ImageIds},
-			describeImagesPageHandler,
-		)
-		return handlerErr == nil && listImagesPageNum <= 100 // arbitrary terminator
-	}
+//listImagesPageHandler := func(page *ecr.ListImagesOutput, lastPage bool) bool {
+//listImagesPageNum++
+//handlerErr = s.ecr.DescribeImagesPages(
+//&ecr.DescribeImagesInput{RepositoryName: &repo, ImageIds: page.ImageIds},
+//describeImagesPageHandler,
+//)
+//return handlerErr == nil && listImagesPageNum <= 100 // arbitrary terminator
+//}
 
-	err := s.ecr.ListImagesPages(
-		&ecr.ListImagesInput{RepositoryName: &repo},
-		listImagesPageHandler,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if handlerErr != nil {
-		return nil, handlerErr
-	}
+//err := s.ecr.ListImagesPages(
+//&ecr.ListImagesInput{RepositoryName: &repo},
+//listImagesPageHandler,
+//)
+//if err != nil {
+//return nil, err
+//}
+//if handlerErr != nil {
+//return nil, handlerErr
+//}
 
-	return images, nil
-}
+//return images, nil
+//}
 
 // func DeleteImages performs a BatchDeleteImage operation for the listed
 // images in the specified repository.
@@ -117,18 +169,18 @@ func (s *Session) DeleteImages(repo string, images model.Images) (*model.DeleteI
 	return result, nil
 }
 
-func imageFromAws(img *ecr.ImageDetail) model.Image {
-	return model.Image{
-		Digest:   *img.ImageDigest,
-		PushedAt: *img.ImagePushedAt,
-		Tags:     unpointerStrings(img.ImageTags),
-	}
-}
+//func imageFromAws(img *ecr.ImageDetail) model.Image {
+//return model.Image{
+//Digest:   *img.ImageDigest,
+//PushedAt: *img.ImagePushedAt,
+//Tags:     unpointerStrings(img.ImageTags),
+//}
+//}
 
-func unpointerStrings(in []*string) []string {
-	out := make([]string, 0)
-	for _, s := range in {
-		out = append(out, *s)
-	}
-	return out
-}
+//func unpointerStrings(in []*string) []string {
+//out := make([]string, 0)
+//for _, s := range in {
+//out = append(out, *s)
+//}
+//return out
+//}

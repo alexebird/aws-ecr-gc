@@ -1,15 +1,22 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
-	"github.com/99designs/aws-ecr-gc/gc"
-	"github.com/99designs/aws-ecr-gc/model"
-	"github.com/99designs/aws-ecr-gc/registry"
+	//"github.com/alexebird/aws-ecr-gc/gc"
+	"github.com/alexebird/aws-ecr-gc/model"
+	"github.com/alexebird/aws-ecr-gc/registry"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	//awsecr "github.com/aws/aws-sdk-go/service/ecr"
+	"github.com/davecgh/go-spew/spew"
+	vault "github.com/hashicorp/vault/api"
+	log "github.com/sirupsen/logrus"
 )
 
 type keepCountMap map[string]uint
@@ -36,36 +43,106 @@ func (k keepCountMap) Set(value string) error {
 	return nil
 }
 
+func waitForIamCreds(fn func() bool) bool {
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	timeout := 30 * time.Second
+	c := make(chan struct{})
+
+	go func() {
+		for {
+			if !fn() {
+				time.Sleep(time.Second)
+			} else {
+				break
+			}
+		}
+		wg.Done()
+	}()
+
+	go func() {
+		defer close(c)
+		wg.Wait()
+	}()
+
+	select {
+	case <-c:
+		return false // completed normally
+	case <-time.After(timeout):
+		return true // timed out
+	}
+
+}
+
 func main() {
-	var region string
-	var repo string
-	var deleteUntagged bool
-	keepCounts := keepCountMap{}
-	flag.StringVar(&region, "region", os.Getenv("AWS_DEFAULT_REGION"), "AWS region (defaults to AWS_DEFAULT_REGION in environment)")
-	flag.StringVar(&repo, "repo", "", "AWS ECR repository name")
-	flag.BoolVar(&deleteUntagged, "delete-untagged", deleteUntagged, "whether to delete untagged images")
-	flag.Var(&keepCounts, "keep", "map of image tag prefixes to how many to keep, e.g. --keep release=4 --keep build=8")
-	flag.Parse()
-	if region == "" || repo == "" {
-		flag.Usage()
-		os.Exit(2)
+	//var repo string
+	//var deleteUntagged bool
+	//keepCounts := keepCountMap{}
+	//flag.StringVar(&region, "region", os.Getenv("AWS_DEFAULT_REGION"), "AWS region (defaults to AWS_DEFAULT_REGION in environment)")
+	//flag.StringVar(&repo, "repo", "", "AWS ECR repository name")
+	//flag.BoolVar(&deleteUntagged, "delete-untagged", deleteUntagged, "whether to delete untagged images")
+	//flag.Var(&keepCounts, "keep", "map of image tag prefixes to how many to keep, e.g. --keep release=4 --keep build=8")
+	//flag.Parse()
+	//if region == "" || repo == "" {
+	//flag.Usage()
+	//os.Exit(2)
+	//}
+
+	ecr := registry.NewSession(awsConf())
+
+	if os.Getenv("VAULT_TOKEN") != "" {
+		waitFn := func() bool {
+			_, err := ecr.Repositories()
+			return err == nil
+		}
+
+		if waitForIamCreds(waitFn) {
+			panic("timed out waiting for IAM creds")
+		}
 	}
 
-	ecr := registry.NewSession(region)
-	images, err := ecr.Images(repo)
+	repos, err := ecr.Repositories()
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("Total images in %s (%s): %d\n", repo, region, len(images))
 
-	gcParams := gc.Params{KeepCounts: keepCounts, DeleteUntagged: deleteUntagged}
-	deletionList := gc.ImagesToDelete(images, gcParams)
-	printImages("Images to delete", deletionList)
-	result, err := ecr.DeleteImages(repo, deletionList)
+	lvl, err := log.ParseLevel("debug")
 	if err != nil {
 		panic(err)
 	}
-	printResult(result)
+
+	log.SetOutput(os.Stdout)
+	log.SetLevel(lvl)
+
+	// 1. collect images into some kind of data structure
+
+	for _, repo := range repos {
+		log.Debug(spew.Sdump(repo))
+		images := ecr.Images(repo.RepositoryName)
+		log.Debug(spew.Sdump(images))
+	}
+
+	// 2. delete untagged images
+	// 3. delete images over the specified threshold (say around 900)
+	// 4. read a list of regexes from a yaml config, match them against tags, keep N most recent of each regex.
+
+	//spew.Dump(repos)
+
+	//spew.Dump(ecr.Images("web-express"))
+	//images, err := ecr.Images(repo)
+	//if err != nil {
+	//panic(err)
+	//}
+	//fmt.Printf("Total images in %s (%s): %d\n", repo, region, len(images))
+
+	//gcParams := gc.Params{KeepCounts: keepCounts, DeleteUntagged: deleteUntagged}
+	//deletionList := gc.ImagesToDelete(images, gcParams)
+	//printImages("Images to delete", deletionList)
+	//result, err := ecr.DeleteImages(repo, deletionList)
+	//if err != nil {
+	//panic(err)
+	//}
+	//printResult(result)
 }
 
 func printImages(heading string, images model.Images) {
@@ -89,4 +166,30 @@ func printResult(result *model.DeleteImagesResult) {
 	for _, f := range result.Failures {
 		fmt.Printf("  %s... %s: %s\n", f.ID.Digest[0:16], f.Code, f.Reason)
 	}
+}
+
+func awsConf() aws.Config {
+	var creds *credentials.Credentials
+	region := os.Getenv("ECR_REGION")
+	conf := aws.Config{Region: &region}
+
+	if os.Getenv("VAULT_TOKEN") != "" {
+		creds = vaultAwsConf()
+		_, err := creds.Get()
+		if err != nil {
+			panic(err)
+		}
+		conf = *conf.WithCredentials(creds)
+	}
+
+	return conf
+}
+
+func vaultAwsConf() *credentials.Credentials {
+	vaultClient, err := vault.NewClient(vault.DefaultConfig())
+	if err != nil {
+		panic(err)
+	}
+
+	return credentials.NewCredentials(&VaultProvider{client: vaultClient})
 }

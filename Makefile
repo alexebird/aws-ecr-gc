@@ -1,5 +1,5 @@
 version = $(shell git describe --tags | tr . _)
-package = github.com/99designs/aws-ecr-gc
+package = github.com/alexebird/aws-ecr-gc
 
 .PHONY: install
 install:

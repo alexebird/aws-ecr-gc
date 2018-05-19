@@ -1,4 +1,4 @@
-package: github.com/99designs/aws-ecr-gc
+package: github.com/alexebird/aws-ecr-gc
 import:
 - package: github.com/aws/aws-sdk-go
   version: ^1.7.9
